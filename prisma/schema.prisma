@@ -1,0 +1,425 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+// npx prisma migrate dev --name example_name --- generate and apply new migration
+// npx prisma migrate deploy --- for production 
+// npx prisma migrate reset --- drops, recreates the database, applies migrations (REMEMBER TO MIGRATE FIRST!!!), and runs the seed script (if configured)
+// npx prisma seed --- seeding DB
+// npx prisma generate --- generate new client
+
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            Int       @id @default(autoincrement())
+  email         String    @unique
+  password      String?
+  name          String?
+  emailVerified DateTime?
+  active        Boolean   @default(false)
+
+  // User preferences from onboarding
+  referralSource    String?
+  preferredLanguage String?
+  codeReason        String?
+  experienceLevel   String?
+  commitmentLevel   String?
+
+  // Onboarding progress tracking
+  onboardingProgress UserOnboardingProgress?
+
+  // Auth related relations
+  activateTokens         ActivateToken[]
+  passwordResetTokens    PasswordResetToken[]
+  accounts               Account[]
+  verificationPageTokens VerificationPageToken[]
+
+  // Code execution related relations
+  submissions CodeSubmission[]
+  
+  // Learning path progress
+  journeyProgress JourneyProgress[]
+  levelProgress   LevelProgress[]
+
+  // New relations for AI challenges
+  challengeAttempts      ChallengeAttempt[]
+  challengeStats         UserChallengeStats[]
+  globalChallengeStats   UserGlobalStats?
+  dailyChallenges   DailyChallenge[]
+  
+  // Achievements
+  userAchievements UserAchievement[]
+}
+
+model UserOnboardingProgress {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Onboarding steps completion status
+  profileCompleted        Boolean @default(false)
+  tutorialCompleted       Boolean @default(false)
+  firstChallengeCompleted Boolean @default(false)
+
+  // Relation to User (one-to-one)
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId Int  @unique // One-to-one relationship with User
+}
+
+model CodeSubmission {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sourceCode String
+  languageId Int
+  stdin      String?
+
+  stdout         String?
+  stderr         String?
+  compile_output String?
+  message        String?
+  status         Int
+
+  executionTime Int?
+  memory        Int?
+
+  user   User @relation(fields: [userId], references: [id])
+  userId Int
+
+  challenge   Challenge? @relation(fields: [challengeId], references: [id])
+  challengeId String?
+  
+  // Link to level if this submission is for a level
+  level   Level? @relation(fields: [levelId], references: [id])
+  levelId Int?
+}
+
+// New models for learning path system
+model Journey {
+  id          Int      @id @default(autoincrement())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  title       String
+  description String
+  slug        String   @unique
+  icon        String? // Icon name or path
+  difficultyLevel String?
+  isActive    Boolean  @default(true)
+  order       Int      @default(0)
+  
+  // Relations
+  levels          Level[]
+  journeyProgress JourneyProgress[]
+}
+
+model Level {
+  id          Int      @id @default(autoincrement())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  title       String
+  description String
+  difficulty  String // "Beginner", "Intermediate", "Advanced", "Expert"
+  defaultCode String
+  expectedOutput String
+  solutionCode String?
+  languageId  Int      @default(28) // Default to Python 3.10
+  order       Int // Position in the journey
+  
+  // Optional fields
+  hints Json? // Stored as a JSON array of strings
+  testCases Json? // Stored as a JSON array of test case objects
+  xpReward  Int @default(100) // XP earned for completing the level
+  enableAiAnalysis Boolean @default(false)
+  
+  // Relations
+  journey        Journey    @relation(fields: [journeyId], references: [id])
+  journeyId      Int
+  levelProgress  LevelProgress[]
+  submissions    CodeSubmission[]
+  dependencies   LevelDependency[] @relation("DependentLevel")
+  dependents     LevelDependency[] @relation("RequiredLevel")
+  
+  @@unique([journeyId, order]) // Ensure order is unique within a journey
+}
+
+// Tracks dependencies between levels (which levels must be completed before others)
+model LevelDependency {
+  id                Int      @id @default(autoincrement())
+  
+  // The level that depends on another level
+  dependentLevel    Level    @relation("DependentLevel", fields: [dependentLevelId], references: [id])
+  dependentLevelId  Int
+  
+  // The level that is required to be completed
+  requiredLevel     Level    @relation("RequiredLevel", fields: [requiredLevelId], references: [id])
+  requiredLevelId   Int
+  
+  @@unique([dependentLevelId, requiredLevelId])
+}
+
+// Tracks overall progress in a journey
+model JourneyProgress {
+  id                Int      @id @default(autoincrement())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  currentLevelOrder Int      @default(1) // Current level in the journey
+  isCompleted       Boolean  @default(false)
+  
+  // Relations
+  user      User    @relation(fields: [userId], references: [id])
+  userId    Int
+  journey   Journey @relation(fields: [journeyId], references: [id])
+  journeyId Int
+  
+  @@unique([userId, journeyId])
+}
+
+// Tracks progress for individual levels
+model LevelProgress {
+  id             Int       @id @default(autoincrement())
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  isCompleted    Boolean   @default(false)
+  completedAt    DateTime?
+  attempts       Int       @default(0)
+  lastSubmittedCode String?
+  
+  // Relations
+  user    User  @relation(fields: [userId], references: [id])
+  userId  Int
+  level   Level @relation(fields: [levelId], references: [id])
+  levelId Int
+  
+  @@unique([userId, levelId])
+}
+
+// Achievement system
+model Achievement {
+  id          Int      @id @default(autoincrement())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  title       String
+  description String
+  icon        String
+  
+  // Badge image or icon information
+  badgeImage  String?
+  
+  // Type of achievement
+  type        String   // e.g., "journey_completion", "level_mastery", "streak"
+  
+  // Criteria as JSON - can contain different logic based on achievement type
+  criteria    Json
+  
+  // Relations
+  userAchievements UserAchievement[]
+}
+
+// Challenge Types
+model ChallengeType {
+  id          Int        @id @default(autoincrement())
+  type        String     @unique // code_golf, time_trial, memory_optimization, debugging
+  description String
+  challenges  Challenge[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+// AI Challenges - This will extend your existing Challenge model
+model Challenge {
+  id                String             @id @default(cuid())
+  title             String?
+  description       String?
+  starterCode       String?
+  languageId        Int?
+  
+  // New fields for AI challenges
+  difficulty        String?            // easy, medium, hard
+  sampleInput       String?
+  expectedOutput    String?
+  timeLimit         Int?              // Max execution time in ms
+  memoryLimit       Int?              // Max memory usage in KB
+  isActive          Boolean           @default(true)
+  initialCode       String?           // Starting code for students
+  solutionCode      String?           // Reference solution
+  
+  // Add this field to track source of the challenge
+  source            String?           @default("manual") // Values: "manual", "daily-ai"
+  
+  // Relations
+  submissions       CodeSubmission[]
+  challengeTypes    ChallengeType[]
+  testCases         ChallengeTestCase[]
+  attempts          ChallengeAttempt[]
+  userStats         UserChallengeStats[]
+  
+  // Add this relation
+  dailyChallenges   DailyChallenge[]
+}
+// New model for daily challenges
+model DailyChallenge {
+  id           Int      @id @default(autoincrement())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  completed    Boolean  @default(false)
+  
+  // Relations
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       Int
+  challenge    Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  challengeId  String
+  
+  @@unique([userId, challengeId])
+  @@index([userId])
+  @@index([challengeId])
+  @@index([createdAt])
+}
+
+// Challenge Test Cases
+model ChallengeTestCase {
+  id              Int        @id @default(autoincrement())
+  challengeId     String
+  challenge       Challenge  @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  input           String?
+  expectedOutput  String?
+  isHidden        Boolean    @default(false)
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+}
+
+// Challenge Attempts (AI competitions)
+model ChallengeAttempt {
+  id              Int        @id @default(autoincrement())
+  createdAt       DateTime   @default(now())
+  
+  userCode        String     @db.Text
+  aiCode          String     @db.Text
+  userExecutionTime Float?
+  userMemory      Int?
+  aiExecutionTime Float?
+  aiMemory        Int?
+  userCorrect     Boolean    @default(false)
+  aiCorrect       Boolean    @default(false)
+  winner          String     // "user", "ai", or "tie"
+  
+  // Relations
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          Int
+  challenge       Challenge  @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  challengeId     String
+  
+  @@index([userId, challengeId])
+}
+
+// User Challenge Statistics
+model UserChallengeStats {
+  id          Int        @id @default(autoincrement())
+  attempts    Int        @default(0)
+  wins        Int        @default(0)
+  ties        Int        @default(0)
+  bestTime    Float?     // Best execution time (ms)
+  bestMemory  Int?       // Best memory usage (KB)
+  bestCodeLength Int?    // Best code length (characters)
+  updatedAt   DateTime   @updatedAt
+  
+  // Relations
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      Int
+  challenge   Challenge  @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  challengeId String
+  
+  @@unique([userId, challengeId])
+}
+
+// Global User Statistics for Challenges
+model UserGlobalStats {
+  id                     Int        @id @default(autoincrement())
+  totalChallengesAttempted Int      @default(0)
+  challengesWon          Int        @default(0)
+  challengesTied         Int        @default(0)
+  codeGolfRating         Int        @default(1000) // ELO-style rating for code golf
+  timeTrialRating        Int        @default(1000) // ELO-style rating for time trials
+  memoryOptRating        Int        @default(1000) // ELO-style rating for memory optimization
+  debuggingRating        Int        @default(1000) // ELO-style rating for debugging
+  updatedAt              DateTime   @updatedAt
+  
+  // Relations
+  user                   User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId                 Int        @unique
+}
+
+model UserAchievement {
+  id            Int       @id @default(autoincrement())
+  createdAt     DateTime  @default(now())
+  awardedAt     DateTime  @default(now())
+  
+  // Relations
+  user         User       @relation(fields: [userId], references: [id])
+  userId       Int
+  achievement  Achievement @relation(fields: [achievementId], references: [id])
+  achievementId Int
+  
+  @@unique([userId, achievementId])
+}
+
+model ActivateToken {
+  id          Int       @id @default(autoincrement())
+  token       String    @unique
+  createdAt   DateTime  @default(now())
+  activatedAt DateTime?
+
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId Int
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  token     String    @unique
+  createdAt DateTime  @default(now())
+  resetAt   DateTime?
+  expiresAt DateTime
+
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId Int
+}
+
+model VerificationPageToken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique
+  expires   DateTime
+  createdAt DateTime @default(now())
+
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId Int
+
+  @@index([token])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            Int
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
